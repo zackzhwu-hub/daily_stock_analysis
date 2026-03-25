@@ -5,6 +5,9 @@
 职责：
 1. 通过 webhook 发送飞书消息
 """
+import base64
+import hashlib
+import hmac
 import logging
 from typing import Dict, Any
 import requests
@@ -27,6 +30,7 @@ class FeishuSender:
             config: 配置对象
         """
         self._feishu_url = getattr(config, 'feishu_webhook_url', None)
+        self._feishu_secret = getattr(config, 'feishu_secret', None)
         self._feishu_max_bytes = getattr(config, 'feishu_max_bytes', 20000)
         self._webhook_verify_ssl = getattr(config, 'webhook_verify_ssl', True)
     
@@ -112,9 +116,50 @@ class FeishuSender:
         
         return success_count == total_chunks
     
+    def _generate_sign(self, timestamp: str) -> str:
+        """
+        生成飞书自定义机器人签名
+
+        签名算法：
+        1. 获取当前时间戳（秒级）
+        2. 拼接字符串：{timestamp}\n{secret}
+        3. 使用 HMAC-SHA256 加密
+        4. Base64 编码
+
+        Args:
+            timestamp: 当前时间戳（秒级，字符串）
+
+        Returns:
+            Base64 编码的签名
+        """
+        if not self._feishu_secret:
+            return ""
+
+        # 拼接字符串：timestamp + \n + secret
+        string_to_sign = f"{timestamp}\n{self._feishu_secret}"
+
+        # HMAC-SHA256 加密
+        hmac_code = hmac.new(
+            string_to_sign.encode('utf-8'),
+            digestmod=hashlib.sha256
+        ).digest()
+
+        # Base64 编码
+        sign = base64.b64encode(hmac_code).decode('utf-8')
+        return sign
+
     def _send_feishu_message(self, content: str) -> bool:
         """发送单条飞书消息（优先使用 Markdown 卡片）"""
+        # 生成时间戳和签名
+        timestamp = str(int(time.time()))
+        sign = self._generate_sign(timestamp)
+
         def _post_payload(payload: Dict[str, Any]) -> bool:
+            # 添加时间戳和签名
+            if self._feishu_secret:
+                payload["timestamp"] = timestamp
+                payload["sign"] = sign
+
             logger.debug(f"飞书请求 URL: {self._feishu_url}")
             logger.debug(f"飞书请求 payload 长度: {len(content)} 字符")
 
